@@ -12,8 +12,15 @@ Example:
 
 import argparse
 import json
+from typing import List
+
 import osmium
 import pyproj
+
+try:
+    import folium  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    folium = None
 
 
 class StraightWayHandler(osmium.SimpleHandler):
@@ -35,6 +42,7 @@ class StraightWayHandler(osmium.SimpleHandler):
 
         lats = [n.lat for n in w.nodes]
         lons = [n.lon for n in w.nodes]
+        geometry: List[List[float]] = [[lat, lon] for lat, lon in zip(lats, lons)]
         length = 0.0
         for i in range(len(lons) - 1):
             length += self.geod.inv(lons[i], lats[i], lons[i + 1], lats[i + 1])[2]
@@ -51,6 +59,7 @@ class StraightWayHandler(osmium.SimpleHandler):
                         "straightness": ratio,
                         "start": [lats[0], lons[0]],
                         "end": [lats[-1], lons[-1]],
+                        "geometry": geometry,
                     }
                 )
 
@@ -82,6 +91,12 @@ def main() -> None:
         default=None,
         help="Optional path to write full JSON results",
     )
+    parser.add_argument(
+        "--map",
+        type=str,
+        default=None,
+        help="Optional path to write an interactive HTML map",
+    )
     args = parser.parse_args()
 
     handler = StraightWayHandler(args.min_length, args.min_straightness)
@@ -98,6 +113,16 @@ def main() -> None:
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(candidates, f, indent=2)
+
+    if args.map and folium is None:
+        raise RuntimeError("folium is required for --map but is not installed")
+    if args.map and candidates:
+        m = folium.Map(location=candidates[0]["geometry"][0], zoom_start=12)
+        for c in candidates:
+            folium.PolyLine(
+                c["geometry"], tooltip=f"Way {c['id']} ({c['highway']})"
+            ).add_to(m)
+        m.save(args.map)
 
 
 if __name__ == "__main__":
