@@ -29,3 +29,22 @@ merge connected road segments irrespective of name tags before searching for
 straight runs. An optional simplification step can remove small kinks from the
 geometry. The script remains experimental and may require tuning the
 `--simplify` parameter depending on the region.
+
+## Longest lines in images
+
+The script `longest_lines.py` scans all PNG files in a directory and reports the
+five longest straight line segments in each. Install the optional dependency
+`opencv-python` (or `scikit-image`) before running it:
+
+```
+pip install opencv-python
+```
+
+Example:
+
+```
+python longest_lines.py images --visualize --out out
+```
+
+This will write copies of the input images with the longest lines drawn as a
+thick red overlay in the `out/` directory.
