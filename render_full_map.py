@@ -19,7 +19,7 @@ import os
 from typing import List, Tuple
 
 import osmium
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 # Colors used for rendering
 LAND_COLOR = (222, 239, 207, 255)  # pale green
@@ -41,6 +41,7 @@ class MapCollector(osmium.SimpleHandler):
         self.buildings: List[List[Tuple[float, float]]] = []
         self.water: List[List[Tuple[float, float]]] = []
         self.land: List[List[Tuple[float, float]]] = []
+        self.places: List[Tuple[float, float, str]] = []
         self.min_lon = 180.0
         self.max_lon = -180.0
         self.min_lat = 90.0
@@ -101,6 +102,15 @@ class MapCollector(osmium.SimpleHandler):
             if w.tags.get("waterway"):
                 self.water.append(coords)
 
+    def node(self, n: osmium.osm.Node) -> None:  # type: ignore[override]
+        if not n.location.valid():
+            return
+        place = n.tags.get("place")
+        name = n.tags.get("name")
+        if place and name:
+            if place in {"city", "town", "village", "hamlet", "suburb", "locality"}:
+                self.places.append((n.lon, n.lat, name))
+
 
 def project(
     lon: float,
@@ -124,6 +134,7 @@ def render_map(
     scale: float,
     line_width: int,
     outfile: str,
+    font_size: int,
 ) -> None:
     min_lon, min_lat, max_lon, max_lat = bbox
     width = max(int((max_lon - min_lon) * scale) + 1, 1)
@@ -133,8 +144,19 @@ def render_map(
 
     img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+    except OSError:
+        font = ImageFont.load_default()
+
+    def inside_bbox(coords: List[Tuple[float, float]]) -> bool:
+        return all(
+            min_lon <= lon <= max_lon and min_lat <= lat <= max_lat for lon, lat in coords
+        )
 
     for coords in data.land:
+        if not inside_bbox(coords):
+            continue
         pixels = [
             project(lon, lat, min_lon, min_lat, scale_x, scale_y, height)
             for lon, lat in coords
@@ -143,6 +165,8 @@ def render_map(
             draw.polygon(pixels, fill=LAND_COLOR)
 
     for coords in data.water:
+        if not inside_bbox(coords):
+            continue
         pixels = [
             project(lon, lat, min_lon, min_lat, scale_x, scale_y, height)
             for lon, lat in coords
@@ -154,6 +178,8 @@ def render_map(
                 draw.line(pixels, fill=WATER_COLOR, width=1)
 
     for coords in data.buildings:
+        if not inside_bbox(coords):
+            continue
         pixels = [
             project(lon, lat, min_lon, min_lat, scale_x, scale_y, height)
             for lon, lat in coords
@@ -168,6 +194,12 @@ def render_map(
         ]
         if len(pixels) >= 2:
             draw.line(pixels, fill=ROAD_COLOR, width=line_width)
+
+    for lon, lat, name in data.places:
+        if not (min_lon <= lon <= max_lon and min_lat <= lat <= max_lat):
+            continue
+        x, y = project(lon, lat, min_lon, min_lat, scale_x, scale_y, height)
+        draw.text((x + 2, y - 2), name, fill=(0, 0, 0, 255), font=font)
 
     os.makedirs(os.path.dirname(outfile) or ".", exist_ok=True)
     img.save(outfile)
@@ -194,13 +226,19 @@ def main() -> None:
         default=1,
         help="Highway line width in pixels (default: 1)",
     )
+    parser.add_argument(
+        "--font-size",
+        type=int,
+        default=12,
+        help="Font size for place labels (default: 12)",
+    )
     args = parser.parse_args()
 
     collector = MapCollector()
     collector.apply_file(args.pbf, locations=True)
 
     bbox = (collector.min_lon, collector.min_lat, collector.max_lon, collector.max_lat)
-    render_map(collector, bbox, args.scale, args.line_width, args.out)
+    render_map(collector, bbox, args.scale, args.line_width, args.out, args.font_size)
 
 
 if __name__ == "__main__":
