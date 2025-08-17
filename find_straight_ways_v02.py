@@ -2,12 +2,13 @@
 """Find long, straight road runs in an OSM PBF file.
 
 This V02 script joins adjacent road segments before measuring their length
-and straightness. It considers all ways tagged with ``highway=*`` and merges
-directly connected segments with the same ``highway`` and ``name`` (if present).
-The merging uses a graph search that respects a configurable maximum angular
-deviation and can optionally filter by ``oneway`` or ``access`` tags. The
-straightness of each merged run is calculated as the ratio between the geodesic
-distance of its end points and the actual path length.
+and straightness. Motorways are ignored and primary or secondary roads can
+be excluded via command line flags. The script merges directly connected
+segments with the same ``highway`` and ``name`` (if present). The merging
+uses a graph search that respects a configurable maximum angular deviation
+and can optionally filter by ``oneway`` or ``access`` tags. The straightness
+of each merged run is calculated as the ratio between the geodesic distance of
+its end points and the actual path length.
 
 Example:
     python find_straight_ways_v02.py pbf/saarland-latest.osm.pbf \
@@ -48,11 +49,17 @@ class WayCollector(osmium.SimpleHandler):
     """Collect relevant OSM ways grouped by (highway, name) with graph edges."""
 
     def __init__(
-        self, oneway_filter: str | None = None, access_filter: str | None = None
+        self,
+        oneway_filter: str | None = None,
+        access_filter: str | None = None,
+        include_primary: bool = True,
+        include_secondary: bool = True,
     ) -> None:
         super().__init__()
         self.oneway_filter = oneway_filter
         self.access_filter = access_filter
+        self.include_primary = include_primary
+        self.include_secondary = include_secondary
         self.groups: Dict[
             Tuple[str, str | None], Dict[str, object]
         ] = defaultdict(lambda: {"segments": [], "node_neighbors": defaultdict(list)})
@@ -60,6 +67,12 @@ class WayCollector(osmium.SimpleHandler):
     def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
         highway = w.tags.get("highway")
         if highway is None or len(w.nodes) < 2:
+            return
+        if highway in {"motorway", "motorway_link"}:
+            return
+        if not self.include_primary and highway in {"primary", "primary_link"}:
+            return
+        if not self.include_secondary and highway in {"secondary", "secondary_link"}:
             return
         name = w.tags.get("name")
         oneway = w.tags.get("oneway")
@@ -268,10 +281,25 @@ def main() -> None:
         default=None,
         help="Filter ways by access tag value",
     )
+    parser.add_argument(
+        "--no-primary",
+        action="store_true",
+        help="Exclude primary roads",
+    )
+    parser.add_argument(
+        "--no-secondary",
+        action="store_true",
+        help="Exclude secondary roads",
+    )
     args = parser.parse_args()
 
     geod = pyproj.Geod(ellps="WGS84")
-    collector = WayCollector(args.oneway, args.access)
+    collector = WayCollector(
+        args.oneway,
+        args.access,
+        include_primary=not args.no_primary,
+        include_secondary=not args.no_secondary,
+    )
     collector.apply_file(args.pbf, locations=True)
 
     candidates: List[Dict[str, object]] = []
