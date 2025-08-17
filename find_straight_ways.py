@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Find long, straight ways in an OSM PBF file.
 
-The script scans an OSM PBF file for ways tagged as `highway=track`,
-`highway=service` or `highway=unclassified` and measures their length and
-straightness (ratio of the geodesic distance between start and end node to the
-actual path length). Ways that exceed the given thresholds are reported.
+The script scans an OSM PBF file for ways tagged with ``highway=*`` and measures
+their length and straightness (ratio of the geodesic distance between start and
+end node to the actual path length). Ways that exceed the given thresholds are
+reported.
 
 Example:
     python find_straight_ways.py pbf/saarland-latest.osm.pbf --min-length 1000 --min-straightness 0.99
@@ -35,9 +35,7 @@ class StraightWayHandler(osmium.SimpleHandler):
 
     def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
         highway = w.tags.get("highway")
-        if highway not in {"track", "service", "unclassified"}:
-            return
-        if len(w.nodes) < 2:
+        if highway is None or len(w.nodes) < 2:
             return
 
         lats = [n.lat for n in w.nodes]
