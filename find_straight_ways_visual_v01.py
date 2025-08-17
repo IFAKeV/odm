@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Render highways from an OSM PBF file to PNG overlays.
+"""Render selected highways from an OSM PBF file to PNG overlays.
 
-The script extracts all ways with the ``highway`` tag from a given OSM PBF
-file and renders each highway type into a separate PNG image with a
-transparent background. All generated images share the same extent and can
-therefore be stacked on top of each other in an image editor.
+The script extracts a subset of ways with the ``highway`` tag from a given
+OSM PBF file and renders each supported highway type into a separate PNG image
+with a transparent background. Supported types are ``motorway``, ``primary``,
+``path``, ``secondary``, ``tertiary``, ``trunk`` and ``unclassified``.
+Additionally, a combined image of ``primary``, ``secondary``, ``tertiary`` and
+``unclassified`` roads is produced. All generated images share the same extent
+and can therefore be stacked on top of each other in an image editor.
 
 Example
 -------
@@ -25,6 +28,16 @@ from typing import Dict, List, Tuple
 import osmium
 from PIL import Image, ImageDraw
 
+ALLOWED_HIGHWAYS = {
+    "motorway",
+    "primary",
+    "path",
+    "secondary",
+    "tertiary",
+    "trunk",
+    "unclassified",
+}
+
 
 class HighwayCollector(osmium.SimpleHandler):
     """Collect all highway ways from an OSM PBF file."""
@@ -39,7 +52,7 @@ class HighwayCollector(osmium.SimpleHandler):
 
     def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
         hw = w.tags.get("highway")
-        if hw is None or len(w.nodes) < 2:
+        if hw is None or len(w.nodes) < 2 or hw not in ALLOWED_HIGHWAYS:
             return
 
         coords: List[Tuple[float, float]] = []
@@ -102,6 +115,25 @@ def render_highways(
             ]
             draw.line(pixels, fill=(255, 255, 255, 255), width=line_width)
         filename = os.path.join(outdir, f"highway_{hw}.png")
+        img.save(filename)
+        print(f"Wrote {filename}")
+
+    combined_keys = ["primary", "secondary", "tertiary", "unclassified"]
+    combined: List[List[Tuple[float, float]]] = []
+    for key in combined_keys:
+        combined.extend(highways.get(key, []))
+    if combined:
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        for coords in combined:
+            pixels = [
+                project(lon, lat, min_lon, min_lat, scale_x, scale_y, height)
+                for lon, lat in coords
+            ]
+            draw.line(pixels, fill=(255, 255, 255, 255), width=line_width)
+        filename = os.path.join(
+            outdir, "highway_primary_secondary_tertiary_unclassified.png"
+        )
         img.save(filename)
         print(f"Wrote {filename}")
 
