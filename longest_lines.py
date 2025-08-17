@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Find the five longest straight lines in PNG images of a directory.
+"""Find the longest straight lines in PNG images of a directory.
 
 For each PNG file the script loads the image in grayscale, performs edge
 extraction and uses a probabilistic Hough transform to detect line segments.
-The five longest segments are reported and can optionally be visualised by
-drawing them onto the original image.
+The longest segments are reported and can optionally be visualised by drawing
+them onto the original image. By default, the five longest segments are
+returned but this can be customised.
 
 Example
 -------
@@ -29,13 +30,13 @@ Line = Tuple[float, Tuple[int, int, int, int]]
 
 
 def detect_longest_lines(
-    image: np.ndarray, min_line_length: int, max_line_gap: int
+    image: np.ndarray, min_line_length: int, max_line_gap: int, count: int
 ) -> List[Line]:
     """Return the longest line segments detected in *image*.
 
     The image should be a single-channel (grayscale or binary) array. The
     function applies Canny edge detection followed by a probabilistic Hough
-    transform. Results are sorted by length in descending order and the five
+    transform. Results are sorted by length in descending order and the *count*
     longest segments are returned.
     """
 
@@ -55,13 +56,14 @@ def detect_longest_lines(
             length = float(np.hypot(x2 - x1, y2 - y1))
             results.append((length, (x1, y1, x2, y2)))
         results.sort(key=lambda x: x[0], reverse=True)
-    return results[:5]
+    return results[:count]
 
 
 def process_image(
     path: Path,
     min_line_length: int,
     max_line_gap: int,
+    count: int,
     visualize: bool,
     out_dir: Path,
 ) -> List[Line]:
@@ -73,7 +75,7 @@ def process_image(
 
     # Binarise using Otsu's method which works for a variety of inputs
     _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    longest = detect_longest_lines(binary, min_line_length, max_line_gap)
+    longest = detect_longest_lines(binary, min_line_length, max_line_gap, count)
 
     if visualize and longest:
         colour = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
@@ -110,6 +112,12 @@ def main() -> None:
         default=10,
         help="Maximum allowed gap between line segments in pixels (default: 10)",
     )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=5,
+        help="Number of longest line segments to report (default: 5)",
+    )
     args = parser.parse_args()
 
     directory = Path(args.directory)
@@ -124,7 +132,12 @@ def main() -> None:
     out_dir = Path(args.out)
     for png in pngs:
         longest = process_image(
-            png, args.min_line_length, args.max_line_gap, args.visualize, out_dir
+            png,
+            args.min_line_length,
+            args.max_line_gap,
+            args.count,
+            args.visualize,
+            out_dir,
         )
         print(png.name)
         for length, (x1, y1, x2, y2) in longest:
