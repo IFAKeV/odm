@@ -297,7 +297,9 @@ def main() -> None:
 
     candidates.sort(key=lambda x: x["length_m"], reverse=True)
 
-    for c in candidates[: args.top]:
+    top_candidates = candidates[: args.top]
+
+    for c in top_candidates:
         name_part = f" {c['name']}" if "name" in c else ""
         print(
             f"Run {'/'.join(map(str, c['ids']))}{name_part} ({c['highway']}): "
@@ -310,9 +312,9 @@ def main() -> None:
 
     if args.map and folium is None:
         raise RuntimeError("folium is required for --map but is not installed")
-    if args.map and candidates:
-        m = folium.Map(location=candidates[0]["geometry"][0], zoom_start=12)
-        for c in candidates:
+    if args.map and top_candidates:
+        m = folium.Map(location=top_candidates[0]["geometry"][0], zoom_start=12)
+        for c in top_candidates:
             folium.PolyLine(
                 c["geometry"], tooltip=f"Run {'/'.join(map(str, c['ids']))}"
             ).add_to(m)
