@@ -10,8 +10,8 @@ same input PBF file and writes a single interactive HTML map showing
 * long and straight road segments that meet a minimum length and straightness
   threshold.
 
-The HTML map contains separate layers for roads, houses and straight segments
-and can be viewed in any web browser.
+The HTML map contains separate layers for roads (optional), houses and straight
+segments and can be viewed in any web browser.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ def create_combined_map(
     straight_segments: Iterable[dict],
     out: Path,
     road_type: str,
+    show_roads: bool,
 ) -> None:
     """Write an HTML map containing buildings, roads and straight segments."""
 
@@ -53,13 +54,14 @@ def create_combined_map(
 
     m = folium.Map(location=[center_lat, center_lon])
 
-    road_group = folium.FeatureGroup(name=f"{road_type} roads")
-    road_color = "green" if road_type == "unclassified" else "gray"
-    for road in roads:
-        folium.PolyLine([(lat, lon) for lon, lat in road], color=road_color, weight=2).add_to(
-            road_group
-        )
-    road_group.add_to(m)
+    if show_roads:
+        road_group = folium.FeatureGroup(name=f"{road_type} roads")
+        road_color = "green" if road_type == "unclassified" else "gray"
+        for road in roads:
+            folium.PolyLine(
+                [(lat, lon) for lon, lat in road], color=road_color, weight=2
+            ).add_to(road_group)
+        road_group.add_to(m)
 
     b_group = folium.FeatureGroup(name="houses")
     for b in buildings:
@@ -104,6 +106,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--processes", type=int, default=None, help="Number of worker processes")
     parser.add_argument("--housenumber", default="8", help="Target addr:housenumber")
     parser.add_argument("--road-type", default="unclassified", help="Highway classification")
+    parser.add_argument(
+        "--no-roads",
+        action="store_true",
+        help="Do not include road layer in the output HTML map",
+    )
     parser.add_argument(
         "--direction",
         choices=["north", "south", "east", "west"],
@@ -177,7 +184,14 @@ def main() -> None:
 
     if folium is None:
         raise RuntimeError("folium is required for HTML output but is not installed")
-    create_combined_map(buildings, roads, top_candidates, Path(args.out), args.road_type)
+    create_combined_map(
+        buildings,
+        roads,
+        top_candidates,
+        Path(args.out),
+        args.road_type,
+        show_roads=not args.no_roads,
+    )
 
     if args.prefilter:
         os.remove(pbf)
