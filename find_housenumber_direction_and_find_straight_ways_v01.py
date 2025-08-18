@@ -6,9 +6,9 @@ and :mod:`find_straight_ways_v06`.  It always runs **both** analyses on the
 same input PBF file and writes a single interactive HTML map showing
 
 * buildings with a target ``addr:housenumber`` north/south/east/west of a
-  classified road and their distance to that road,
-* long and straight road segments that meet a minimum length and straightness
-  threshold.
+  road of a given highway classification and their distance to that road,
+* long and straight road segments of the same highway class that meet a
+  minimum length and straightness threshold.
 
 The HTML map contains separate layers for roads (optional), houses and straight
 segments and can be viewed in any web browser.
@@ -105,7 +105,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefilter", action="store_true", help="Run osmium tags-filter before processing")
     parser.add_argument("--processes", type=int, default=None, help="Number of worker processes")
     parser.add_argument("--housenumber", default="8", help="Target addr:housenumber")
-    parser.add_argument("--road-type", default="unclassified", help="Highway classification")
+    parser.add_argument(
+        "--road-type",
+        default="unclassified",
+        help="Highway classification to analyse (for houses and straight segments)",
+    )
     parser.add_argument(
         "--no-roads",
         action="store_true",
@@ -167,8 +171,9 @@ def main() -> None:
         include_secondary=not args.no_secondary,
     )
     collector.apply_file(str(pbf), locations=True)
+    segments = [s for s in collector.segments if s.highway == args.road_type]
     candidates = extract_straight_sections(
-        collector.segments, geod, args.min_length, args.min_straightness
+        segments, geod, args.min_length, args.min_straightness
     )
     top_candidates = candidates[: args.top]
     for c in top_candidates:
