@@ -128,6 +128,7 @@ def main() -> None:
         args.access,
         include_primary=not args.no_primary,
         include_secondary=not args.no_secondary,
+        only_unclassified=True,
     )
     collector.apply_file(str(pbf), locations=True)
     segments = extract_straight_sections(

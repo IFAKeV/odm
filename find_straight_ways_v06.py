@@ -51,12 +51,14 @@ class WayCollector(osmium.SimpleHandler):
         access_filter: str | None = None,
         include_primary: bool = True,
         include_secondary: bool = True,
+        only_unclassified: bool = False,
     ) -> None:
         super().__init__()
         self.oneway_filter = oneway_filter
         self.access_filter = access_filter
         self.include_primary = include_primary
         self.include_secondary = include_secondary
+        self.only_unclassified = only_unclassified
         self.segments: List[SegmentInfo] = []
 
     def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
@@ -64,6 +66,8 @@ class WayCollector(osmium.SimpleHandler):
         if highway is None or len(w.nodes) < 2:
             return
         if highway in {"motorway", "motorway_link"}:
+            return
+        if self.only_unclassified and highway != "unclassified":
             return
         if not self.include_primary and highway in {"primary", "primary_link"}:
             return
@@ -184,6 +188,11 @@ def main() -> None:
         action="store_true",
         help="Exclude secondary roads",
     )
+    parser.add_argument(
+        "--only-unclassified",
+        action="store_true",
+        help="Process only highway=unclassified",
+    )
     args = parser.parse_args()
 
     geod = pyproj.Geod(ellps="WGS84")
@@ -192,6 +201,7 @@ def main() -> None:
         args.access,
         include_primary=not args.no_primary,
         include_secondary=not args.no_secondary,
+        only_unclassified=args.only_unclassified,
     )
     collector.apply_file(args.pbf, locations=True)
 
