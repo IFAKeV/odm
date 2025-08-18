@@ -15,6 +15,7 @@ Example
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from typing import List, Tuple
 
@@ -131,14 +132,19 @@ def project(
 def render_map(
     data: MapCollector,
     bbox: Tuple[float, float, float, float],
-    scale: float,
+    width: int,
+    height: int,
     line_width: int,
     outfile: str,
     font_size: int,
 ) -> None:
+    """Render *data* inside *bbox* using fixed *width*/*height*.
+
+    ``width`` and ``height`` are taken from metadata when available so that the
+    resulting image matches previously generated highway overlays.
+    """
+
     min_lon, min_lat, max_lon, max_lat = bbox
-    width = max(int((max_lon - min_lon) * scale) + 1, 1)
-    height = max(int((max_lat - min_lat) * scale) + 1, 1)
     scale_x = width / (max_lon - min_lon) if max_lon > min_lon else 1.0
     scale_y = height / (max_lat - min_lat) if max_lat > min_lat else 1.0
 
@@ -215,6 +221,18 @@ def main() -> None:
         help="Output PNG file (default: map.png)",
     )
     parser.add_argument(
+        "--bounds",
+        metavar=("MIN_LON", "MIN_LAT", "MAX_LON", "MAX_LAT"),
+        type=float,
+        nargs=4,
+        help="Explicit geographical bounds to render",
+    )
+    parser.add_argument(
+        "--bounds-json",
+        default=None,
+        help="Path to bounds metadata JSON file (default: none)",
+    )
+    parser.add_argument(
         "--scale",
         type=float,
         default=10000.0,
@@ -237,8 +255,31 @@ def main() -> None:
     collector = MapCollector()
     collector.apply_file(args.pbf, locations=True)
 
-    bbox = (collector.min_lon, collector.min_lat, collector.max_lon, collector.max_lat)
-    render_map(collector, bbox, args.scale, args.line_width, args.out, args.font_size)
+    bbox: Tuple[float, float, float, float]
+    width: int
+    height: int
+
+    if args.bounds_json:
+        with open(args.bounds_json, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        bbox = (
+            meta["min_lon"],
+            meta["min_lat"],
+            meta["max_lon"],
+            meta["max_lat"],
+        )
+        width = int(meta["width"])
+        height = int(meta["height"])
+    elif args.bounds:
+        bbox = tuple(args.bounds)  # type: ignore[assignment]
+        width = max(int((bbox[2] - bbox[0]) * args.scale) + 1, 1)
+        height = max(int((bbox[3] - bbox[1]) * args.scale) + 1, 1)
+    else:
+        bbox = (collector.min_lon, collector.min_lat, collector.max_lon, collector.max_lat)
+        width = max(int((bbox[2] - bbox[0]) * args.scale) + 1, 1)
+        height = max(int((bbox[3] - bbox[1]) * args.scale) + 1, 1)
+
+    render_map(collector, bbox, width, height, args.line_width, args.out, args.font_size)
 
 
 if __name__ == "__main__":
