@@ -54,8 +54,9 @@ def create_combined_map(
     m = folium.Map(location=[center_lat, center_lon])
 
     road_group = folium.FeatureGroup(name=f"{road_type} roads")
+    road_color = "green" if road_type == "unclassified" else "gray"
     for road in roads:
-        folium.PolyLine([(lat, lon) for lon, lat in road], color="blue", weight=2).add_to(
+        folium.PolyLine([(lat, lon) for lon, lat in road], color=road_color, weight=2).add_to(
             road_group
         )
     road_group.add_to(m)
@@ -75,7 +76,9 @@ def create_combined_map(
 
     s_group = folium.FeatureGroup(name="straight segments")
     for c in segments:
-        folium.PolyLine(c["geometry"], tooltip=f"Segment {c['id']}").add_to(s_group)
+        folium.PolyLine(
+            c["geometry"], color="blue", tooltip=f"Segment {c['id']}"
+        ).add_to(s_group)
     s_group.add_to(m)
 
     folium.LayerControl().add_to(m)
