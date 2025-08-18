@@ -64,3 +64,27 @@ python png_overlay_html.py out/ \
 Open the resulting `*.html` files in a browser to compare the overlay with the
 actual map data. The script uses [Folium](https://python-visualization.github.io/folium/);
 install it with `pip install folium` if necessary.
+
+## Find house number 8 north of unclassified roads
+
+`find_housenumber8_north.py` searches for buildings with `addr:housenumber=8` that
+lie north of the nearest `highway=unclassified` segment at a distance between
+50–150 m. The result is written to an interactive HTML map with separate layers
+for roads and buildings.
+
+For best performance pre-filter the PBF file:
+
+```
+osmium tags-filter pbf input.osm.pbf \
+    w/highway=unclassified w/building addr:housenumber=8 -o filtered.pbf
+python find_housenumber8_north.py filtered.pbf --out houses.html
+```
+
+Alternatively let the script run the filtering step:
+
+```
+python find_housenumber8_north.py input.osm.pbf --prefilter --out houses.html
+```
+
+The script indexes road segments in an R-tree and evaluates building distances
+in parallel. Use `--processes` to control the worker count.
