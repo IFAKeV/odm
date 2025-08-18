@@ -78,11 +78,11 @@ def process_image(
     longest = detect_longest_lines(binary, min_line_length, max_line_gap, count)
 
     if visualize and longest:
-        colour = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        overlay = np.zeros((*image.shape, 4), dtype=np.uint8)
         for _, (x1, y1, x2, y2) in longest:
-            cv2.line(colour, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.line(overlay, (x1, y1), (x2, y2), (0, 0, 255, 255), 3)
         out_dir.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(out_dir / path.name), colour)
+        cv2.imwrite(str(out_dir / path.name), overlay)
 
     return longest
 
