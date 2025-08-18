@@ -3,16 +3,18 @@
 
 The script scans an (optionally pre-filtered) OSM PBF file for buildings with a
 specific ``addr:housenumber``. It computes the distance of each building to the
-nearest road of the requested ``highway`` classification and keeps those that
-lie strictly north/south/east/west of the road and within the given distance
-window. An interactive HTML map is written with separate layers for roads and
-buildings.
+nearest road of the requested ``highway`` classification and optionally to a
+second house number. Only buildings that lie strictly north/south/east/west of
+the road, within the road-distance window and in the specified distance range to
+the second house number are kept. An interactive HTML map is written with
+separate layers for roads and buildings.
 
 Example
 -------
     # pre-filtering using osmium (recommended)
     osmium tags-filter pbf input.osm.pbf \
-        w/highway=unclassified w/building addr:housenumber=8 -o filtered.pbf
+        w/highway=unclassified w/building addr:housenumber=8 \
+        addr:housenumber=6 -o filtered.pbf
     python find_housenumber_direction.py filtered.pbf --out houses.html
 
     # alternatively let the script do the filtering
@@ -43,13 +45,15 @@ class Building:
 
 
 class Collector(osmium.SimpleHandler):
-    """Collect building centroids and road segments."""
+    """Collect building centroids, reference houses and road segments."""
 
-    def __init__(self, road_type: str, housenumber: str) -> None:
+    def __init__(self, road_type: str, housenumber: str, other_hn: str) -> None:
         super().__init__()
         self.road_type = road_type
         self.housenumber = housenumber
+        self.other_hn = other_hn
         self.buildings: List[Tuple[float, float]] = []
+        self.other_buildings: List[Tuple[float, float]] = []
         self.roads: List[List[Tuple[float, float]]] = []
         self.segments: List[
             Tuple[float, float, float, float, float, float, float, float]
@@ -73,13 +77,14 @@ class Collector(osmium.SimpleHandler):
                 self.segments.append(
                     (lon1, lat1, lon2, lat2, min_lon, max_lon, min_lat, max_lat)
                 )
-        if (
-            w.is_closed()
-            and w.tags.get("building")
-            and w.tags.get("addr:housenumber") == self.housenumber
-        ):
-            centroid = _centroid(coords)
-            self.buildings.append(centroid)
+        if w.is_closed() and w.tags.get("building"):
+            hn = w.tags.get("addr:housenumber")
+            if hn == self.housenumber:
+                centroid = _centroid(coords)
+                self.buildings.append(centroid)
+            elif hn == self.other_hn:
+                centroid = _centroid(coords)
+                self.other_buildings.append(centroid)
 
 
 def _point_to_segment_distance(
@@ -113,6 +118,20 @@ def _point_to_segment_distance(
     return hypot(px - x, py - y) * 6_371_000
 
 
+def _point_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
+    """Approximate distance in metres between two lon/lat points."""
+
+    (lon1, lat1), (lon2, lat2) = p1, p2
+    lat_ref = radians((lat1 + lat2) / 2)
+
+    def to_xy(lon: float, lat: float) -> Tuple[float, float]:
+        return radians(lon) * cos(lat_ref), radians(lat)
+
+    x1, y1 = to_xy(lon1, lat1)
+    x2, y2 = to_xy(lon2, lat2)
+    return hypot(x1 - x2, y1 - y2) * 6_371_000
+
+
 def _centroid(coords: Sequence[Tuple[float, float]]) -> Tuple[float, float]:
     lon = sum(lon for lon, _ in coords) / len(coords)
     lat = sum(lat for _, lat in coords) / len(coords)
@@ -128,13 +147,17 @@ def _deg_buffer(lat: float, metres: float) -> Tuple[float, float]:
 # global storage for multiprocessing workers
 SEGMENTS: List[Tuple[float, float, float, float, float, float, float, float]]
 RINDEX: index.Index
+OTHER_BUILDINGS: List[Tuple[float, float]]
+OINDEX: index.Index
 
 
 def _init_worker(
-    segments: List[Tuple[float, float, float, float, float, float, float, float]]
+    segments: List[Tuple[float, float, float, float, float, float, float, float]],
+    other_buildings: List[Tuple[float, float]],
 ) -> None:
-    global SEGMENTS, RINDEX
+    global SEGMENTS, RINDEX, OTHER_BUILDINGS, OINDEX
     SEGMENTS = segments
+    OTHER_BUILDINGS = other_buildings
     RINDEX = index.Index()
     for i, (
         lon1,
@@ -147,6 +170,9 @@ def _init_worker(
         max_lat,
     ) in enumerate(SEGMENTS):
         RINDEX.insert(i, (min_lon, min_lat, max_lon, max_lat))
+    OINDEX = index.Index()
+    for i, (lon, lat) in enumerate(OTHER_BUILDINGS):
+        OINDEX.insert(i, (lon, lat, lon, lat))
 
 
 def _process_chunk(
@@ -154,6 +180,8 @@ def _process_chunk(
     min_dist: float,
     max_dist: float,
     direction: str,
+    hn_min: float,
+    hn_max: float,
 ) -> List[Building]:
     results: List[Building] = []
     for lon, lat in chunk:
@@ -183,7 +211,18 @@ def _process_chunk(
             d = _point_to_segment_distance((lon, lat), (lon1, lat1), (lon2, lat2))
             if d < min_d:
                 min_d = d
-        if min_dist <= min_d <= max_dist:
+        if not (min_dist <= min_d <= max_dist):
+            continue
+        hn_lon_buf, hn_lat_buf = _deg_buffer(lat, hn_max)
+        min_hn = float("inf")
+        for j in OINDEX.intersection(
+            (lon - hn_lon_buf, lat - hn_lat_buf, lon + hn_lon_buf, lat + hn_lat_buf)
+        ):
+            lon2, lat2 = OTHER_BUILDINGS[j]
+            d2 = _point_distance((lon, lat), (lon2, lat2))
+            if d2 < min_hn:
+                min_hn = d2
+        if hn_min <= min_hn <= hn_max:
             results.append(Building(lon, lat, min_d))
     return results
 
@@ -195,7 +234,9 @@ def _chunkify(
         yield seq[i : i + size]
 
 
-def prefilter_pbf(src: Path, road_type: str, housenumber: str) -> Path:
+def prefilter_pbf(
+    src: Path, road_type: str, housenumber: str, other_hn: str
+) -> Path:
     """Run osmium tags-filter to reduce the PBF to relevant objects."""
     fd, name = tempfile.mkstemp(suffix=".osm.pbf")
     os.close(fd)
@@ -207,6 +248,7 @@ def prefilter_pbf(src: Path, road_type: str, housenumber: str) -> Path:
         f"w/highway={road_type}",
         "w/building",
         f"addr:housenumber={housenumber}",
+        f"addr:housenumber={other_hn}",
         "-o",
         str(tmp),
         "--overwrite",
@@ -220,21 +262,29 @@ def find_buildings(
     min_dist: float,
     max_dist: float,
     housenumber: str,
+    other_hn: str,
+    hn_min: float,
+    hn_max: float,
     road_type: str,
     direction: str,
     processes: int | None = None,
 ) -> Tuple[List[Building], List[List[Tuple[float, float]]]]:
-    collector = Collector(road_type, housenumber)
+    collector = Collector(road_type, housenumber, other_hn)
     collector.apply_file(str(pbf), locations=True)
-    if not collector.buildings:
+    if not collector.buildings or not collector.other_buildings:
         return [], collector.roads
     with mp.Pool(
-        processes=processes, initializer=_init_worker, initargs=(collector.segments,)
+        processes=processes,
+        initializer=_init_worker,
+        initargs=(collector.segments, collector.other_buildings),
     ) as pool:
         chunks = list(_chunkify(collector.buildings, 100))
         results = pool.starmap(
             _process_chunk,
-            [(chunk, min_dist, max_dist, direction) for chunk in chunks],
+            [
+                (chunk, min_dist, max_dist, direction, hn_min, hn_max)
+                for chunk in chunks
+            ],
         )
     buildings = [b for chunk in results for b in chunk]
     return buildings, collector.roads
@@ -284,6 +334,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-dist", type=float, default=150.0, help="Maximum distance in metres"
     )
+    parser.add_argument("--other-housenumber", default="6", help="Reference addr:housenumber")
+    parser.add_argument("--min-hn-dist", type=float, default=100.0, help="Minimum distance to reference house in metres")
+    parser.add_argument("--max-hn-dist", type=float, default=300.0, help="Maximum distance to reference house in metres")
     parser.add_argument(
         "--prefilter",
         action="store_true",
@@ -311,12 +364,15 @@ def main() -> None:
     args = parse_args()
     pbf = Path(args.pbf)
     if args.prefilter:
-        pbf = prefilter_pbf(pbf, args.road_type, args.housenumber)
+        pbf = prefilter_pbf(pbf, args.road_type, args.housenumber, args.other_housenumber)
     buildings, roads = find_buildings(
         pbf,
         args.min_dist,
         args.max_dist,
         args.housenumber,
+        args.other_housenumber,
+        args.min_hn_dist,
+        args.max_hn_dist,
         args.road_type,
         args.direction,
         args.processes,
