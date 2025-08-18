@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Combined utilities for housenumber search and straight road detection.
+"""Locate buildings by house number and detect straight road segments.
 
-This script exposes the features of :mod:`find_housenumber_direction` and
-:mod:`find_straight_ways_v06` under a single command line interface.  Use the
-``housenumber`` subcommand to locate buildings with a given house number that
-lie north/south/east/west of a classified road.  Use the ``straight``
-subcommand to analyse the input PBF for long and straight road segments.
+This script combines the functionality of :mod:`find_housenumber_direction`
+and :mod:`find_straight_ways_v06`.  It always runs **both** analyses on the
+same input PBF file and writes a single interactive HTML map showing
+
+* buildings with a target ``addr:housenumber`` north/south/east/west of a
+  classified road and their distance to that road,
+* long and straight road segments that meet a minimum length and straightness
+  threshold.
+
+The HTML map contains separate layers for roads, houses and straight segments
+and can be viewed in any web browser.
 """
 
 from __future__ import annotations
@@ -14,21 +20,121 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import Iterable, Sequence, Tuple
 
 import pyproj
 
 from find_housenumber_direction import (
-    create_map as create_house_map,
+    Building,
     find_buildings,
     prefilter_pbf,
 )
 from find_straight_ways_v06 import WayCollector, extract_straight_sections, folium
 
 
-def _run_housenumber(args: argparse.Namespace) -> None:
+def create_combined_map(
+    buildings: Iterable[Building],
+    roads: Iterable[Sequence[Tuple[float, float]]],
+    straight_segments: Iterable[dict],
+    out: Path,
+    road_type: str,
+) -> None:
+    """Write an HTML map containing buildings, roads and straight segments."""
+
+    buildings = list(buildings)
+    segments = list(straight_segments)
+    if buildings:
+        center_lat = sum(b.lat for b in buildings) / len(buildings)
+        center_lon = sum(b.lon for b in buildings) / len(buildings)
+    elif segments:
+        center_lat, center_lon = segments[0]["geometry"][0]
+    else:
+        raise ValueError("no buildings or straight segments to plot")
+
+    m = folium.Map(location=[center_lat, center_lon])
+
+    road_group = folium.FeatureGroup(name=f"{road_type} roads")
+    for road in roads:
+        folium.PolyLine([(lat, lon) for lon, lat in road], color="blue", weight=2).add_to(
+            road_group
+        )
+    road_group.add_to(m)
+
+    b_group = folium.FeatureGroup(name="houses")
+    for b in buildings:
+        folium.CircleMarker(
+            location=[b.lat, b.lon],
+            radius=4,
+            weight=1,
+            color="red",
+            fill=True,
+            fill_opacity=0.8,
+            popup=f"{b.distance:.1f} m",
+        ).add_to(b_group)
+    b_group.add_to(m)
+
+    s_group = folium.FeatureGroup(name="straight segments")
+    for c in segments:
+        folium.PolyLine(c["geometry"], tooltip=f"Segment {c['id']}").add_to(s_group)
+    s_group.add_to(m)
+
+    folium.LayerControl().add_to(m)
+    m.save(str(out))
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pbf", help="Path to OSM PBF file")
+    parser.add_argument("--out", default="analysis.html", help="Output HTML file")
+
+    # parameters for housenumber search
+    parser.add_argument("--min-dist", type=float, default=50.0, help="Minimum distance in metres")
+    parser.add_argument("--max-dist", type=float, default=150.0, help="Maximum distance in metres")
+    parser.add_argument("--other-housenumber", default="6", help="Reference addr:housenumber")
+    parser.add_argument(
+        "--min-hn-dist", type=float, default=100.0, help="Minimum distance to reference house in metres"
+    )
+    parser.add_argument(
+        "--max-hn-dist", type=float, default=300.0, help="Maximum distance to reference house in metres"
+    )
+    parser.add_argument("--prefilter", action="store_true", help="Run osmium tags-filter before processing")
+    parser.add_argument("--processes", type=int, default=None, help="Number of worker processes")
+    parser.add_argument("--housenumber", default="8", help="Target addr:housenumber")
+    parser.add_argument("--road-type", default="unclassified", help="Highway classification")
+    parser.add_argument(
+        "--direction",
+        choices=["north", "south", "east", "west"],
+        default="north",
+        help="Direction of buildings relative to the road",
+    )
+
+    # parameters for straight segment detection
+    parser.add_argument(
+        "--min-length", type=float, default=250.0, help="Minimum segment length in meters (default: 250)"
+    )
+    parser.add_argument(
+        "--min-straightness",
+        type=float,
+        default=0.99,
+        help="Minimum straightness ratio (default: 0.99)",
+    )
+    parser.add_argument("--top", type=int, default=5, help="Number of top segments to print (default: 5)")
+    parser.add_argument("--json", type=str, default=None, help="Optional path to write full JSON results")
+    parser.add_argument("--oneway", type=str, default=None, help="Filter ways by oneway tag value")
+    parser.add_argument("--access", type=str, default=None, help="Filter ways by access tag value")
+    parser.add_argument("--no-primary", action="store_true", help="Exclude primary roads")
+    parser.add_argument("--no-secondary", action="store_true", help="Exclude secondary roads")
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
     pbf = Path(args.pbf)
     if args.prefilter:
         pbf = prefilter_pbf(pbf, args.road_type, args.housenumber, args.other_housenumber)
+
     buildings, roads = find_buildings(
         pbf,
         args.min_dist,
@@ -42,12 +148,7 @@ def _run_housenumber(args: argparse.Namespace) -> None:
         args.processes,
     )
     print(f"Found {len(buildings)} buildings")
-    create_house_map(buildings, roads, Path(args.out), args.road_type)
-    if args.prefilter:
-        os.remove(pbf)
 
-
-def _run_straight(args: argparse.Namespace) -> None:
     geod = pyproj.Geod(ellps="WGS84")
     collector = WayCollector(
         args.oneway,
@@ -55,7 +156,7 @@ def _run_straight(args: argparse.Namespace) -> None:
         include_primary=not args.no_primary,
         include_secondary=not args.no_secondary,
     )
-    collector.apply_file(args.pbf, locations=True)
+    collector.apply_file(str(pbf), locations=True)
     candidates = extract_straight_sections(
         collector.segments, geod, args.min_length, args.min_straightness
     )
@@ -66,72 +167,17 @@ def _run_straight(args: argparse.Namespace) -> None:
             f"Segment {c['id']}{name_part} ({c['highway']}): length "
             f"{c['length_m']:.1f} m, straightness {c['straightness']:.4f}"
         )
+
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(candidates, f, indent=2)
-    if args.map and folium is None:
-        raise RuntimeError("folium is required for --map but is not installed")
-    if args.map and top_candidates:
-        m = folium.Map(location=top_candidates[0]["geometry"][0], zoom_start=12)
-        for c in top_candidates:
-            folium.PolyLine(c["geometry"], tooltip=f"Segment {c['id']}").add_to(m)
-        m.save(args.map)
 
+    if folium is None:
+        raise RuntimeError("folium is required for HTML output but is not installed")
+    create_combined_map(buildings, roads, top_candidates, Path(args.out), args.road_type)
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    hn = sub.add_parser("housenumber", help="Find buildings by housenumber")
-    hn.add_argument("pbf", help="Path to OSM PBF file")
-    hn.add_argument("--out", default="houses.html", help="Output HTML file")
-    hn.add_argument("--min-dist", type=float, default=50.0, help="Minimum distance in metres")
-    hn.add_argument("--max-dist", type=float, default=150.0, help="Maximum distance in metres")
-    hn.add_argument("--other-housenumber", default="6", help="Reference addr:housenumber")
-    hn.add_argument(
-        "--min-hn-dist", type=float, default=100.0, help="Minimum distance to reference house in metres"
-    )
-    hn.add_argument(
-        "--max-hn-dist", type=float, default=300.0, help="Maximum distance to reference house in metres"
-    )
-    hn.add_argument("--prefilter", action="store_true", help="Run osmium tags-filter before processing")
-    hn.add_argument("--processes", type=int, default=None, help="Number of worker processes")
-    hn.add_argument("--housenumber", default="8", help="Target addr:housenumber")
-    hn.add_argument("--road-type", default="unclassified", help="Highway classification")
-    hn.add_argument(
-        "--direction",
-        choices=["north", "south", "east", "west"],
-        default="north",
-        help="Direction of buildings relative to the road",
-    )
-    hn.set_defaults(func=_run_housenumber)
-
-    st = sub.add_parser("straight", help="Find straight road segments")
-    st.add_argument("pbf", help="Path to OSM PBF file")
-    st.add_argument(
-        "--min-length", type=float, default=250.0, help="Minimum segment length in meters (default: 250)"
-    )
-    st.add_argument(
-        "--min-straightness",
-        type=float,
-        default=0.99,
-        help="Minimum straightness ratio (default: 0.99)",
-    )
-    st.add_argument("--top", type=int, default=5, help="Number of top segments to print (default: 5)")
-    st.add_argument("--json", type=str, default=None, help="Optional path to write full JSON results")
-    st.add_argument("--map", type=str, default=None, help="Optional path to write an interactive HTML map")
-    st.add_argument("--oneway", type=str, default=None, help="Filter ways by oneway tag value")
-    st.add_argument("--access", type=str, default=None, help="Filter ways by access tag value")
-    st.add_argument("--no-primary", action="store_true", help="Exclude primary roads")
-    st.add_argument("--no-secondary", action="store_true", help="Exclude secondary roads")
-    st.set_defaults(func=_run_straight)
-
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    args.func(args)
+    if args.prefilter:
+        os.remove(pbf)
 
 
 if __name__ == "__main__":
