@@ -153,6 +153,34 @@ def main():
             clip_pbf = os.path.join(tmpdir, "clip.pbf")
             run(["osmium", "getid", "-r", pbf, f"r{rel}", "-o", b_pbf, "-O"])
             run(["osmium", "export", b_pbf, "-o", b_geo, "-O"])
+
+            # "osmium export" erzeugt ein GeoJSON-FeatureCollection. "osmium extract"
+            # erwartet jedoch eine Datei, deren oberste Ebene direkt eine Polygon-
+            # oder MultiPolygon-Geometrie enthält. Daher wird die exportierte
+            # GeoJSON-Datei hier auf die erste passende Geometrie reduziert.
+            try:
+                with open(b_geo, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                geom = None
+                if data.get("type") == "FeatureCollection":
+                    for feat in data.get("features", []):
+                        g = feat.get("geometry")
+                        if g and g.get("type") in ("Polygon", "MultiPolygon"):
+                            geom = g
+                            break
+                elif data.get("type") == "Feature":
+                    g = data.get("geometry")
+                    if g and g.get("type") in ("Polygon", "MultiPolygon"):
+                        geom = g
+                elif data.get("type") in ("Polygon", "MultiPolygon"):
+                    geom = data
+                if not geom:
+                    raise RuntimeError("Boundary-Relation enthält keine Polygongeometrie")
+                with open(b_geo, "w", encoding="utf-8") as f:
+                    json.dump({"type": geom["type"], "coordinates": geom["coordinates"]}, f)
+            except Exception as exc:  # pragma: no cover - nur zur Fehlerdiagnose
+                raise RuntimeError(f"Fehler beim Verarbeiten der Boundary: {exc}") from exc
+
             run(["osmium", "extract", "-p", b_geo, pbf, "-o", clip_pbf, "-O"])
             source_pbf = clip_pbf
         else:
