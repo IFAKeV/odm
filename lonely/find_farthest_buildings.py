@@ -89,7 +89,8 @@ def compute_lonely_buildings(geojson_path, limit=1):
         d = haversine_m(lon, lat, lon1, lat1)
         results.append((osm_id, nn_osm_id, d, lon, lat))
 
-    results.sort(key=lambda x: x[1], reverse=True)
+    # Sortieren nach Abstand in Metern, nicht nach OSM-ID
+    results.sort(key=lambda x: x[2], reverse=True)
     return results[:limit]
 
 
