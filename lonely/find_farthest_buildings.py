@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 from shapely.geometry import MultiPolygon, Polygon, shape, Point
 from shapely.strtree import STRtree
@@ -77,15 +78,16 @@ def compute_lonely_buildings(geojson_path, limit=1):
         return []
 
     tree = STRtree(points)
-    results = []  # (osm_id, distance_m, lon, lat)
+    results = []  # (osm_id, nn_osm_id, distance_m, lon, lat)
     for idx, (lon, lat, osm_id) in enumerate(items):
         nn_idx_arr, _ = tree.query_nearest(points[idx], return_distance=True, exclusive=True, all_matches=False)
         if len(nn_idx_arr) == 0:
             continue
         nn_idx = int(nn_idx_arr[0])
+        nn_osm_id = items[nn_idx][2]
         lon1, lat1, _ = items[nn_idx]
         d = haversine_m(lon, lat, lon1, lat1)
-        results.append((osm_id, d, lon, lat))
+        results.append((osm_id, nn_osm_id, d, lon, lat))
 
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:limit]
@@ -133,16 +135,27 @@ def main():
         outprefix = args.out
         os.makedirs(os.path.dirname(outprefix), exist_ok=True) if os.path.dirname(outprefix) else None
         csv_path = outprefix + "_lonely.csv"
+        html_path = outprefix + "_lonely.html"
 
         with open(csv_path, "w", encoding="utf-8") as f:
-            f.write("osm_id,distance_m,lon,lat\n")
-            for osm_id, d, lon, lat in results:
-                f.write(f"{osm_id},{d:.2f},{lon},{lat}\n")
+            f.write("osm_id,nn_osm_id,distance_m,lon,lat\n")
+            for osm_id, nn_osm_id, d, lon, lat in results:
+                f.write(f"{osm_id},{nn_osm_id},{d:.2f},{lon},{lat}\n")
+
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Loneliest Buildings</title></head><body>\n")
+            f.write("<h1>Top loneliest buildings</h1>\n<ul>\n")
+            for osm_id, nn_osm_id, d, lon, lat in results:
+                query = f"[out:json];(way({osm_id});way({nn_osm_id}););out geom;"
+                link = "https://overpass-turbo.eu/?Q=" + urllib.parse.quote(query)
+                f.write(f"<li><a href='{link}'>{osm_id} vs {nn_osm_id} ({d:.2f} m)</a></li>\n")
+            f.write("</ul>\n</body></html>\n")
 
         print(f"Top {len(results)} loneliest buildings:")
-        for osm_id, d, lon, lat in results:
-            print(f"  {osm_id}: {d:.2f} m @ ({lon},{lat})")
+        for osm_id, nn_osm_id, d, lon, lat in results:
+            print(f"  {osm_id} vs {nn_osm_id}: {d:.2f} m @ ({lon},{lat})")
         print(f"CSV: {csv_path}")
+        print(f"HTML: {html_path}")
     finally:
         if not args.keep_intermediate:
             shutil.rmtree(tmpdir, ignore_errors=True)
