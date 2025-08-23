@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Findet Gebäude mit Hausnummern, die den größten Abstand zu ihrem nächsten
-Nachbarn haben. Der Bereich kann optional über eine Boundary-Relation aus dem
-PBF ausgeschnitten werden. Der Ansatz basiert auf run_iso_pipeline.py.
+Findet Adressen (Gebäude oder Adresspunkte) mit Hausnummern, die den größten
+Abstand zu ihrem nächsten Nachbarn haben. Der Bereich kann optional über eine
+Boundary-Relation aus dem PBF ausgeschnitten werden. Der Ansatz basiert auf
+run_iso_pipeline.py.
 
 Beispiel:
   python3 find_farthest_buildings.py \
@@ -13,7 +14,7 @@ Beispiel:
 
 Optional:
   --relation 12345       # OSM-Relations-ID für eine Boundary
-  --limit N              # Anzahl der ausgegebenen Gebäude
+  --limit N              # Anzahl der ausgegebenen Ergebnisse
   --keep-intermediate    # behält Boundary/Clip/Filter-Zwischendateien
 """
 
@@ -49,8 +50,19 @@ def haversine_m(lon1, lat1, lon2, lat2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
+def overpass_ref(osm_id: str) -> str:
+    """Baue einen Overpass-Referenzteil für eine OSM-ID."""
+    if osm_id.startswith("n"):
+        return f"node({osm_id[1:]})"
+    if osm_id.startswith("w"):
+        return f"way({osm_id[1:]})"
+    if osm_id.startswith("r"):
+        return f"relation({osm_id[1:]})"
+    return f"way({osm_id})"
+
+
 def compute_lonely_buildings(geojson_path, limit=1):
-    """Lese Gebäude und bestimme die mit dem größten Abstand zum nächsten Nachbarn."""
+    """Lese Adressen und bestimme die mit dem größten Abstand zum nächsten Nachbarn."""
     with open(geojson_path, "r", encoding="utf-8") as f:
         gj = json.load(f)
 
@@ -64,12 +76,22 @@ def compute_lonely_buildings(geojson_path, limit=1):
         if not geom:
             continue
         g = shape(geom)
-        if not isinstance(g, (Polygon, MultiPolygon)):
+        if isinstance(g, (Polygon, MultiPolygon)):
+            c = g.centroid
+            lon = float(c.x)
+            lat = float(c.y)
+        elif isinstance(g, Point):
+            lon = float(g.x)
+            lat = float(g.y)
+        else:
             continue
-        c = g.centroid
-        osm_id = props.get("osm_id") or props.get("id") or props.get("@id") or f"feat_{i}"
-        lon = float(c.x)
-        lat = float(c.y)
+
+        osm_type = props.get("@type") or props.get("type") or ""
+        osm_id_num = props.get("@id") or props.get("id") or props.get("osm_id")
+        if osm_type and osm_id_num is not None:
+            osm_id = f"{osm_type[0]}{osm_id_num}"
+        else:
+            osm_id = str(osm_id_num) if osm_id_num is not None else f"feat_{i}"
         items.append((lon, lat, osm_id))
         points.append(Point(lon, lat))
 
@@ -126,8 +148,18 @@ def main():
         addr_pbf = os.path.join(tmpdir, "buildings_addr.pbf")
         addr_geo = os.path.join(tmpdir, "buildings_addr.geojson")
 
-        run(["osmium", "tags-filter", source_pbf, "w/building", "w/addr:housenumber", "-o", addr_pbf, "-O"])
-        run(["osmium", "export", addr_pbf, "-a", "id", "-o", addr_geo, "-O"])
+        run([
+            "osmium",
+            "tags-filter",
+            source_pbf,
+            "n/addr:housenumber",
+            "w/addr:housenumber",
+            "r/addr:housenumber",
+            "-o",
+            addr_pbf,
+            "-O",
+        ])
+        run(["osmium", "export", addr_pbf, "-a", "id,type", "-o", addr_geo, "-O"])
 
         results = compute_lonely_buildings(addr_geo, args.limit)
         if not results:
@@ -144,15 +176,15 @@ def main():
                 f.write(f"{osm_id},{nn_osm_id},{d:.2f},{lon},{lat}\n")
 
         with open(html_path, "w", encoding="utf-8") as f:
-            f.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Loneliest Buildings</title></head><body>\n")
-            f.write("<h1>Top loneliest buildings</h1>\n<ul>\n")
+            f.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Loneliest Addresses</title></head><body>\n")
+            f.write("<h1>Top loneliest addresses</h1>\n<ul>\n")
             for osm_id, nn_osm_id, d, lon, lat in results:
-                query = f"[out:json];(way({osm_id});way({nn_osm_id}););out geom;"
+                query = f"[out:json];({overpass_ref(osm_id)};{overpass_ref(nn_osm_id)};);out geom;"
                 link = "https://overpass-turbo.eu/?Q=" + urllib.parse.quote(query)
                 f.write(f"<li><a href='{link}'>{osm_id} vs {nn_osm_id} ({d:.2f} m)</a></li>\n")
             f.write("</ul>\n</body></html>\n")
 
-        print(f"Top {len(results)} loneliest buildings:")
+        print(f"Top {len(results)} loneliest addresses:")
         for osm_id, nn_osm_id, d, lon, lat in results:
             print(f"  {osm_id} vs {nn_osm_id}: {d:.2f} m @ ({lon},{lat})")
         print(f"CSV: {csv_path}")
