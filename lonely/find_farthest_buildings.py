@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Findet die Gebäudepaare mit Hausnummern, die innerhalb eines Bereichs am
-weitesten voneinander entfernt liegen. Der Bereich kann optional über eine
-Boundary-Relation aus dem PBF ausgeschnitten werden. Der Ansatz basiert auf
-run_iso_pipeline.py.
+Findet Gebäude mit Hausnummern, die den größten Abstand zu ihrem nächsten
+Nachbarn haben. Der Bereich kann optional über eine Boundary-Relation aus dem
+PBF ausgeschnitten werden. Der Ansatz basiert auf run_iso_pipeline.py.
 
 Beispiel:
   python3 find_farthest_buildings.py \
@@ -14,7 +13,7 @@ Beispiel:
 
 Optional:
   --relation 12345       # OSM-Relations-ID für eine Boundary
-  --limit N              # Anzahl der ausgegebenen Paare
+  --limit N              # Anzahl der ausgegebenen Gebäude
   --keep-intermediate    # behält Boundary/Clip/Filter-Zwischendateien
 """
 
@@ -27,7 +26,8 @@ import subprocess
 import sys
 import tempfile
 
-from shapely.geometry import MultiPolygon, Polygon, shape
+from shapely.geometry import MultiPolygon, Polygon, shape, Point
+from shapely.strtree import STRtree
 
 
 def run(cmd, **kw):
@@ -48,12 +48,13 @@ def haversine_m(lon1, lat1, lon2, lat2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
-def compute_farthest_pairs(geojson_path, limit=1):
-    """Lese Gebäude aus GeoJSON und bestimme die am weitesten entfernten Paare."""
+def compute_lonely_buildings(geojson_path, limit=1):
+    """Lese Gebäude und bestimme die mit dem größten Abstand zum nächsten Nachbarn."""
     with open(geojson_path, "r", encoding="utf-8") as f:
         gj = json.load(f)
 
     items = []  # (lon, lat, osm_id)
+    points = []  # shapely Points für räumlichen Index
     for i, feat in enumerate(gj.get("features", [])):
         props = feat.get("properties") or {}
         if "addr:housenumber" not in props:
@@ -66,56 +67,36 @@ def compute_farthest_pairs(geojson_path, limit=1):
             continue
         c = g.centroid
         osm_id = props.get("osm_id") or props.get("id") or props.get("@id") or f"feat_{i}"
-        items.append((float(c.x), float(c.y), osm_id))
+        lon = float(c.x)
+        lat = float(c.y)
+        items.append((lon, lat, osm_id))
+        points.append(Point(lon, lat))
 
     if len(items) < 2:
         print("Zu wenige Gebäude mit addr:housenumber.", file=sys.stderr)
         return []
 
-    # Farthest pair liegt auf der konvexen Hülle (Monotone Chain)
-    pts = sorted([(lon, lat, idx) for idx, (lon, lat, _id) in enumerate(items)])
-    if len(pts) <= 1:
-        return []
+    tree = STRtree(points)
+    results = []  # (osm_id, distance_m, lon, lat)
+    for idx, (lon, lat, osm_id) in enumerate(items):
+        nn_idx_arr, _ = tree.query_nearest(points[idx], return_distance=True, exclusive=True, all_matches=False)
+        if len(nn_idx_arr) == 0:
+            continue
+        nn_idx = int(nn_idx_arr[0])
+        lon1, lat1, _ = items[nn_idx]
+        d = haversine_m(lon, lat, lon1, lat1)
+        results.append((osm_id, d, lon, lat))
 
-    def cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    lower = []
-    for p in pts:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
-            lower.pop()
-        lower.append(p)
-
-    upper = []
-    for p in reversed(pts):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
-
-    hull = lower[:-1] + upper[:-1]
-    hull_indices = [idx for _, _, idx in hull]
-
-    dists = []
-    for h_idx, i in enumerate(hull_indices):
-        lon0, lat0, _ = items[i]
-        for j in hull_indices[h_idx + 1:]:
-            lon1, lat1, _ = items[j]
-            d = haversine_m(lon0, lat0, lon1, lat1)
-            dists.append((d, i, j))
-
-    dists.sort(reverse=True)
-    res = []
-    for d, i, j in dists[:limit]:
-        res.append((items[i], items[j], d))
-    return res
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:limit]
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Finde die am weitesten entfernten Gebäudepaare mit Hausnummern in einer PBF-Datei.")
+    ap = argparse.ArgumentParser(description="Finde Gebäude mit dem größten Abstand zum nächsten Nachbarn in einer PBF-Datei.")
     ap.add_argument("--pbf", required=True, help="Eingabe-PBF")
     ap.add_argument("--out", required=True, help="Ausgabedatei-Präfix")
     ap.add_argument("--relation", help="OSM-Relations-ID der Boundary (optional)")
-    ap.add_argument("--limit", type=int, default=1, help="Anzahl der ausgegebenen entferntesten Paare")
+    ap.add_argument("--limit", type=int, default=1, help="Anzahl der ausgegebenen Ergebnisse")
     ap.add_argument("--keep-intermediate", action="store_true", help="Zwischendateien behalten")
     args = ap.parse_args()
 
@@ -145,22 +126,22 @@ def main():
         run(["osmium", "tags-filter", source_pbf, "w/building", "w/addr:housenumber", "-o", addr_pbf, "-O"])
         run(["osmium", "export", addr_pbf, "-a", "id", "-o", addr_geo, "-O"])
 
-        results = compute_farthest_pairs(addr_geo, args.limit)
+        results = compute_lonely_buildings(addr_geo, args.limit)
         if not results:
             sys.exit(1)
 
         outprefix = args.out
         os.makedirs(os.path.dirname(outprefix), exist_ok=True) if os.path.dirname(outprefix) else None
-        csv_path = outprefix + "_farthest.csv"
+        csv_path = outprefix + "_lonely.csv"
 
         with open(csv_path, "w", encoding="utf-8") as f:
-            f.write("osm_id_1,osm_id_2,distance_m,lon1,lat1,lon2,lat2\n")
-            for (lon0, lat0, osm0), (lon1, lat1, osm1), d in results:
-                f.write(f"{osm0},{osm1},{d:.2f},{lon0},{lat0},{lon1},{lat1}\n")
+            f.write("osm_id,distance_m,lon,lat\n")
+            for osm_id, d, lon, lat in results:
+                f.write(f"{osm_id},{d:.2f},{lon},{lat}\n")
 
-        print(f"Top {len(results)} farthest distances:")
-        for (lon0, lat0, osm0), (lon1, lat1, osm1), d in results:
-            print(f"  {d:.2f} m zwischen {osm0} und {osm1}")
+        print(f"Top {len(results)} loneliest buildings:")
+        for osm_id, d, lon, lat in results:
+            print(f"  {osm_id}: {d:.2f} m @ ({lon},{lat})")
         print(f"CSV: {csv_path}")
     finally:
         if not args.keep_intermediate:
