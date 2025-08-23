@@ -25,7 +25,7 @@ Optional:
   --keep-intermediate  # behält Boundary/Clip/Filter-Zwischendateien
 """
 
-import argparse, os, sys, subprocess, json, math, tempfile, shutil, csv
+import argparse, os, sys, subprocess, json, math, tempfile, shutil, csv, urllib.parse
 import numpy as np
 from shapely.geometry import shape, Polygon, MultiPolygon, Point
 from shapely.strtree import STRtree
@@ -41,6 +41,29 @@ def haversine_m(lon1, lat1, lon2, lat2):
     dphi = math.radians(lat2-lat1); dlmb = math.radians(lon2-lon1)
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlmb/2)**2
     return 2*R*math.asin(math.sqrt(a))
+
+
+def overpass_ref(osm_id: str) -> str:
+    if str(osm_id).startswith("n"):
+        return f"node({str(osm_id)[1:]})"
+    if str(osm_id).startswith("w"):
+        return f"way({str(osm_id)[1:]})"
+    if str(osm_id).startswith("r"):
+        return f"relation({str(osm_id)[1:]})"
+    return f"way({osm_id})"
+
+
+def osm_url(osm_id: str) -> str:
+    s = str(osm_id)
+    if s.startswith("n"):
+        return f"https://www.openstreetmap.org/node/{s[1:]}"
+    if s.startswith("w"):
+        return f"https://www.openstreetmap.org/way/{s[1:]}"
+    if s.startswith("r"):
+        return f"https://www.openstreetmap.org/relation/{s[1:]}"
+    if s.isdigit():
+        return f"https://www.openstreetmap.org/way/{s}"
+    return ""
 
 def compute_isolation(geojson_path, out_prefix, min_distance=0.0, limit=0):
     with open(geojson_path, "r", encoding="utf-8") as f:
@@ -114,19 +137,55 @@ def compute_isolation(geojson_path, out_prefix, min_distance=0.0, limit=0):
 
     with open(csv_path, "w", newline="", encoding="utf-8") as fp:
         w = csv.writer(fp)
-        w.writerow(["osm_id","nearest_osm_id","nearest_dist_m","osm_url","nearest_osm_url","lon","lat"])
+        w.writerow([
+            "osm_id",
+            "nearest_osm_id",
+            "nearest_dist_m",
+            "osm_url",
+            "nearest_osm_url",
+            "overpass_url",
+            "lon",
+            "lat",
+        ])
         for r in results:
-            url0 = f"https://www.openstreetmap.org/way/{r['osm_id']}" if str(r["osm_id"]).isdigit() else ""
-            url1 = f"https://www.openstreetmap.org/way/{r['nearest_osm_id']}" if str(r["nearest_osm_id"]).isdigit() else ""
-            w.writerow([r["osm_id"], r["nearest_osm_id"], f"{r['nearest_dist_m']:.2f}", url0, url1, r["lon"], r["lat"]])
+            url0 = osm_url(r["osm_id"])
+            url1 = osm_url(r["nearest_osm_id"])
+            query = f"[out:json];({overpass_ref(r['osm_id'])};{overpass_ref(r['nearest_osm_id'])};);out geom;"
+            o_url = "https://overpass-turbo.eu/?Q=" + urllib.parse.quote(query) + "&R"
+            w.writerow([
+                r["osm_id"],
+                r["nearest_osm_id"],
+                f"{r['nearest_dist_m']:.2f}",
+                url0,
+                url1,
+                o_url,
+                r["lon"],
+                r["lat"],
+            ])
 
     with open(html_path, "w", encoding="utf-8") as f:
         f.write("<!doctype html><meta charset='utf-8'><title>Isolated buildings</title>")
         f.write("<style>body{font-family:system-ui,Arial;margin:20px} a{display:block;margin:4px 0}</style>")
         f.write(f"<h1>Alleinstehendste Gebäude</h1><p>n={len(results)}</p>")
         for r in results:
-            url0 = f"https://www.openstreetmap.org/way/{r['osm_id']}" if str(r['osm_id']).isdigit() else ""
-            f.write(f"<a href='{url0}' target='_blank' rel='noreferrer noopener'>{url0}</a> – Abstand: {r['nearest_dist_m']:.1f} m<br/>\n")
+            url0 = osm_url(r["osm_id"])
+            url1 = osm_url(r["nearest_osm_id"])
+            query = f"[out:json];({overpass_ref(r['osm_id'])};{overpass_ref(r['nearest_osm_id'])};);out geom;"
+            o_url = "https://overpass-turbo.eu/?Q=" + urllib.parse.quote(query) + "&R"
+            osm0 = (
+                f"<a href='{url0}' target='_blank' rel='noreferrer noopener'>{r['osm_id']}</a>"
+                if url0
+                else str(r['osm_id'])
+            )
+            osm1 = (
+                f"<a href='{url1}' target='_blank' rel='noreferrer noopener'>{r['nearest_osm_id']}</a>"
+                if url1
+                else str(r['nearest_osm_id'])
+            )
+            f.write(
+                f"<a href='{o_url}' target='_blank' rel='noreferrer noopener'>Overpass</a>: "
+                f"{osm0} – {osm1} – Abstand: {r['nearest_dist_m']:.1f} m<br/>\n"
+            )
 
     return len(results), csv_path, html_path
 
