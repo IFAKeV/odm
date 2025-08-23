@@ -61,6 +61,19 @@ def overpass_ref(osm_id: str) -> str:
     return f"way({osm_id})"
 
 
+def osm_url(osm_id: str) -> str:
+    """Erzeuge einen direkten OpenStreetMap-Link für eine OSM-ID."""
+    if osm_id.startswith("n"):
+        return f"https://www.openstreetmap.org/node/{osm_id[1:]}"
+    if osm_id.startswith("w"):
+        return f"https://www.openstreetmap.org/way/{osm_id[1:]}"
+    if osm_id.startswith("r"):
+        return f"https://www.openstreetmap.org/relation/{osm_id[1:]}"
+    if osm_id.isdigit():
+        return f"https://www.openstreetmap.org/way/{osm_id}"
+    return ""
+
+
 def compute_lonely_buildings(geojson_path, limit=1):
     """Lese Adressen und bestimme die mit dem größten Abstand zum nächsten Nachbarn."""
     with open(geojson_path, "r", encoding="utf-8") as f:
@@ -171,17 +184,25 @@ def main():
         html_path = outprefix + "_lonely.html"
 
         with open(csv_path, "w", encoding="utf-8") as f:
-            f.write("osm_id,nn_osm_id,distance_m,lon,lat\n")
+            f.write("osm_id,nn_osm_id,distance_m,lon,lat,osm_url,nn_osm_url\n")
             for osm_id, nn_osm_id, d, lon, lat in results:
-                f.write(f"{osm_id},{nn_osm_id},{d:.2f},{lon},{lat}\n")
+                url0 = osm_url(osm_id)
+                url1 = osm_url(nn_osm_id)
+                f.write(f"{osm_id},{nn_osm_id},{d:.2f},{lon},{lat},{url0},{url1}\n")
 
         with open(html_path, "w", encoding="utf-8") as f:
             f.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Loneliest Addresses</title></head><body>\n")
             f.write("<h1>Top loneliest addresses</h1>\n<ul>\n")
             for osm_id, nn_osm_id, d, lon, lat in results:
                 query = f"[out:json];({overpass_ref(osm_id)};{overpass_ref(nn_osm_id)};);out geom;"
-                link = "https://overpass-turbo.eu/?Q=" + urllib.parse.quote(query)
-                f.write(f"<li><a href='{link}'>{osm_id} vs {nn_osm_id} ({d:.2f} m)</a></li>\n")
+                link = "https://overpass-turbo.eu/?Q=" + urllib.parse.quote(query) + "&R"
+                url0 = osm_url(osm_id)
+                url1 = osm_url(nn_osm_id)
+                osm0 = f"<a href='{url0}' target='_blank'>{osm_id}</a>" if url0 else osm_id
+                osm1 = f"<a href='{url1}' target='_blank'>{nn_osm_id}</a>" if url1 else nn_osm_id
+                f.write(
+                    f"<li><a href='{link}' target='_blank'>Overpass</a>: {osm0} vs {osm1} ({d:.2f} m)</li>\n"
+                )
             f.write("</ul>\n</body></html>\n")
 
         print(f"Top {len(results)} loneliest addresses:")
@@ -196,3 +217,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
