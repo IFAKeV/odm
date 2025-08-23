@@ -88,3 +88,20 @@ python find_housenumber8_north.py input.osm.pbf --prefilter --out houses.html
 
 The script indexes road segments in an R-tree and evaluates building distances
 in parallel. Use `--processes` to control the worker count.
+
+## Find T-shaped buildings
+
+`find_t_shaped_buildings.py` scans an OSM PBF file for building footprints that
+form a simple T shape. Matching building IDs are printed as OpenStreetMap links
+and can optionally be exported to an interactive HTML map.
+
+Example:
+
+```
+python find_t_shaped_buildings.py pbf/bremen-latest.osm.pbf \
+    --out t_buildings.txt --map t_buildings.html
+```
+
+The `--out` option writes the links to a text file and `--map` creates a map
+using [Folium](https://python-visualization.github.io/folium/). Install the
+optional dependency with `pip install folium` if necessary.
