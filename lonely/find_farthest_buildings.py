@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Findet das Gebäudepaar mit Hausnummern, das innerhalb eines Bereichs am
-weitesten voneinander entfernt liegt. Der Bereich kann optional über eine
+Findet die Gebäudepaare mit Hausnummern, die innerhalb eines Bereichs am
+weitesten voneinander entfernt liegen. Der Bereich kann optional über eine
 Boundary-Relation aus dem PBF ausgeschnitten werden. Der Ansatz basiert auf
 run_iso_pipeline.py.
 
 Beispiel:
   python3 find_farthest_buildings.py \
     --pbf pbf/bremen-latest.osm.pbf \
-    --out out/bremen_farthest
+    --out out/bremen_farthest \
+    --limit 5
 
 Optional:
   --relation 12345       # OSM-Relations-ID für eine Boundary
+  --limit N              # Anzahl der ausgegebenen Paare
   --keep-intermediate    # behält Boundary/Clip/Filter-Zwischendateien
 """
 
@@ -46,8 +48,8 @@ def haversine_m(lon1, lat1, lon2, lat2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
-def compute_farthest_pair(geojson_path):
-    """Lese Gebäude aus GeoJSON und bestimme das am weitesten entfernte Paar."""
+def compute_farthest_pairs(geojson_path, limit=1):
+    """Lese Gebäude aus GeoJSON und bestimme die am weitesten entfernten Paare."""
     with open(geojson_path, "r", encoding="utf-8") as f:
         gj = json.load(f)
 
@@ -68,12 +70,12 @@ def compute_farthest_pair(geojson_path):
 
     if len(items) < 2:
         print("Zu wenige Gebäude mit addr:housenumber.", file=sys.stderr)
-        return None
+        return []
 
     # Farthest pair liegt auf der konvexen Hülle (Monotone Chain)
     pts = sorted([(lon, lat, idx) for idx, (lon, lat, _id) in enumerate(items)])
     if len(pts) <= 1:
-        return None
+        return []
 
     def cross(o, a, b):
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
@@ -93,26 +95,27 @@ def compute_farthest_pair(geojson_path):
     hull = lower[:-1] + upper[:-1]
     hull_indices = [idx for _, _, idx in hull]
 
-    maxd = -1.0
-    pair = (None, None)
+    dists = []
     for h_idx, i in enumerate(hull_indices):
         lon0, lat0, _ = items[i]
         for j in hull_indices[h_idx + 1:]:
             lon1, lat1, _ = items[j]
             d = haversine_m(lon0, lat0, lon1, lat1)
-            if d > maxd:
-                maxd = d
-                pair = (i, j)
+            dists.append((d, i, j))
 
-    i, j = pair
-    return items[i], items[j], maxd
+    dists.sort(reverse=True)
+    res = []
+    for d, i, j in dists[:limit]:
+        res.append((items[i], items[j], d))
+    return res
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Finde das am weitesten entfernte Gebäudepaar mit Hausnummern in einer PBF-Datei.")
+    ap = argparse.ArgumentParser(description="Finde die am weitesten entfernten Gebäudepaare mit Hausnummern in einer PBF-Datei.")
     ap.add_argument("--pbf", required=True, help="Eingabe-PBF")
     ap.add_argument("--out", required=True, help="Ausgabedatei-Präfix")
     ap.add_argument("--relation", help="OSM-Relations-ID der Boundary (optional)")
+    ap.add_argument("--limit", type=int, default=1, help="Anzahl der ausgegebenen entferntesten Paare")
     ap.add_argument("--keep-intermediate", action="store_true", help="Zwischendateien behalten")
     args = ap.parse_args()
 
@@ -142,20 +145,22 @@ def main():
         run(["osmium", "tags-filter", source_pbf, "w/building", "w/addr:housenumber", "-o", addr_pbf, "-O"])
         run(["osmium", "export", addr_pbf, "-a", "id", "-o", addr_geo, "-O"])
 
-        res = compute_farthest_pair(addr_geo)
-        if res is None:
+        results = compute_farthest_pairs(addr_geo, args.limit)
+        if not results:
             sys.exit(1)
 
-        (lon0, lat0, osm0), (lon1, lat1, osm1), d = res
         outprefix = args.out
         os.makedirs(os.path.dirname(outprefix), exist_ok=True) if os.path.dirname(outprefix) else None
         csv_path = outprefix + "_farthest.csv"
 
         with open(csv_path, "w", encoding="utf-8") as f:
             f.write("osm_id_1,osm_id_2,distance_m,lon1,lat1,lon2,lat2\n")
-            f.write(f"{osm0},{osm1},{d:.2f},{lon0},{lat0},{lon1},{lat1}\n")
+            for (lon0, lat0, osm0), (lon1, lat1, osm1), d in results:
+                f.write(f"{osm0},{osm1},{d:.2f},{lon0},{lat0},{lon1},{lat1}\n")
 
-        print(f"Farthest distance: {d:.2f} m between {osm0} and {osm1}")
+        print(f"Top {len(results)} farthest distances:")
+        for (lon0, lat0, osm0), (lon1, lat1, osm1), d in results:
+            print(f"  {d:.2f} m zwischen {osm0} und {osm1}")
         print(f"CSV: {csv_path}")
     finally:
         if not args.keep_intermediate:
