@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Find the smallest buildings with house numbers in an OSM PBF file.
+"""Find the smallest freestanding buildings with house numbers in an OSM PBF file.
 
 The script scans all ways tagged with ``building=*`` and ``addr:housenumber``
-and reports the smallest footprints by area.  Results are printed as links to
-OpenStreetMap.  Optionally a CSV file can be written.
+and reports the smallest freestanding footprints by area.  Results are printed
+as links to OpenStreetMap.  Optionally a CSV file can be written.
 """
 
 from __future__ import annotations
 
 import argparse
 import math
-from typing import List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 try:  # optional dependency
     import osmium  # type: ignore
@@ -48,11 +48,11 @@ def _area_m2(coords: Sequence[Coord]) -> float:
 
 if osmium is not None:
     class BuildingCollector(osmium.SimpleHandler):
-        """Collect buildings with house numbers."""
+        """Collect buildings with house numbers and their node IDs."""
 
         def __init__(self) -> None:
             super().__init__()
-            self.buildings: List[Tuple[int, List[Coord]]] = []
+            self.buildings: List[Tuple[int, List[Coord], List[int]]] = []
 
         def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
             hn = w.tags.get("addr:housenumber")
@@ -64,13 +64,16 @@ if osmium is not None:
             if len(w.nodes) < 3:
                 return
             coords: List[Coord] = []
+            node_ids: List[int] = []
             for n in w.nodes:
                 if not n.location.valid():
                     return
                 coords.append((n.lon, n.lat))
+                node_ids.append(n.ref)
             if coords[0] != coords[-1]:
                 coords.append(coords[0])
-            self.buildings.append((w.id, coords))
+                node_ids.append(node_ids[0])
+            self.buildings.append((w.id, coords, node_ids))
 else:  # pragma: no cover - used when osmium is missing
     class BuildingCollector:  # type: ignore[no-redef]
         def __init__(self) -> None:
@@ -92,8 +95,18 @@ def main() -> None:
     collector = BuildingCollector()
     collector.apply_file(args.pbf, locations=True)
 
+    node_usage: Dict[int, int] = {}
+    for _, _, node_ids in collector.buildings:
+        for nid in node_ids:
+            node_usage[nid] = node_usage.get(nid, 0) + 1
+
+    freestanding: List[Tuple[int, List[Coord]]] = []
+    for bid, coords, node_ids in collector.buildings:
+        if all(node_usage[nid] == 1 for nid in node_ids):
+            freestanding.append((bid, coords))
+
     items = []
-    for bid, coords in collector.buildings:
+    for bid, coords in freestanding:
         area = _area_m2(coords)
         items.append((area, bid))
     items.sort(key=lambda x: x[0])
