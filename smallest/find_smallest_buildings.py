@@ -56,7 +56,10 @@ if osmium is not None:
 
         def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
             hn = w.tags.get("addr:housenumber")
-            if not w.tags.get("building") or not hn:
+            building = w.tags.get("building")
+            if not building or not hn:
+                return
+            if building == "allotment_house" or w.tags.get("power") == "substation":
                 return
             if len(w.nodes) < 3:
                 return
@@ -113,7 +116,7 @@ def main() -> None:
             for area, bid in items:
                 url = f"https://www.openstreetmap.org/way/{bid}"
                 fp.write(
-                    f'<li><a href="{url}">{url}</a> {area:.2f} m^2</li>\n'
+                    f'<li><a href="{url}" target="_blank">{url}</a> {area:.2f} m^2</li>\n'
                 )
             fp.write("</ul></body></html>\n")
 
