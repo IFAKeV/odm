@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import math
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 try:  # optional dependency
     import osmium  # type: ignore
@@ -50,12 +50,16 @@ if osmium is not None:
     class BuildingCollector(osmium.SimpleHandler):
         """Collect buildings with house numbers."""
 
-        def __init__(self) -> None:
+        def __init__(self, housenumber: Optional[str] = None) -> None:
             super().__init__()
+            self.housenumber = housenumber
             self.buildings: List[Tuple[int, List[Coord]]] = []
 
         def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
-            if not w.tags.get("building") or not w.tags.get("addr:housenumber"):
+            hn = w.tags.get("addr:housenumber")
+            if not w.tags.get("building") or not hn:
+                return
+            if self.housenumber and hn != self.housenumber:
                 return
             if len(w.nodes) < 3:
                 return
@@ -69,7 +73,7 @@ if osmium is not None:
             self.buildings.append((w.id, coords))
 else:  # pragma: no cover - used when osmium is missing
     class BuildingCollector:  # type: ignore[no-redef]
-        def __init__(self) -> None:
+        def __init__(self, housenumber: Optional[str] = None) -> None:
             raise RuntimeError("osmium is required to collect buildings")
 
 
@@ -79,12 +83,14 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=10,
                         help="Number of buildings to report")
     parser.add_argument("--out", help="Optional CSV output path")
+    parser.add_argument("--html", help="Optional HTML output path")
+    parser.add_argument("--housenumber", help="Filter by specific house number")
     args = parser.parse_args()
 
     if osmium is None:  # pragma: no cover - runtime check
         raise RuntimeError("osmium is required but not installed")
 
-    collector = BuildingCollector()
+    collector = BuildingCollector(args.housenumber)
     collector.apply_file(args.pbf, locations=True)
 
     items = []
@@ -104,6 +110,16 @@ def main() -> None:
             for area, bid in items:
                 url = f"https://www.openstreetmap.org/way/{bid}"
                 fp.write(f"{url},{area:.2f}\n")
+
+    if args.html:
+        with open(args.html, "w", encoding="utf-8") as fp:
+            fp.write("<!DOCTYPE html>\n<html><body><ul>\n")
+            for area, bid in items:
+                url = f"https://www.openstreetmap.org/way/{bid}"
+                fp.write(
+                    f'<li><a href="{url}">{url}</a> {area:.2f} m^2</li>\n'
+                )
+            fp.write("</ul></body></html>\n")
 
 
 if __name__ == "__main__":
