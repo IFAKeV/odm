@@ -84,3 +84,17 @@ python find_t_shaped_buildings.py pbf/bremen-latest.osm.pbf \
 The `--out` option writes the links to a text file and `--map` creates a map
 using [Folium](https://python-visualization.github.io/folium/). Install the
 optional dependency with `pip install folium` if necessary.
+
+## Find smallest buildings with house numbers
+
+`find_smallest_buildings.py` lists building footprints tagged with
+`addr:housenumber` and reports the ones with the smallest area.  The
+results are printed as OpenStreetMap links and can optionally be written to a
+CSV file.
+
+Example:
+
+```
+python smallest/find_smallest_buildings.py pbf/bremen-latest.osm.pbf \
+    --limit 10 --out tiny_buildings.csv
+```
