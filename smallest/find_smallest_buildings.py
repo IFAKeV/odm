@@ -59,7 +59,7 @@ if osmium is not None:
             building = w.tags.get("building")
             if not building or not hn:
                 return
-            if building in {"allotment_house", "hut", "cabin"} or w.tags.get("power") == "substation":
+            if building in {"allotment_house","shed","hut","cabin","service","container","retail","static_caravan","kiosk"} or w.tags.get("power") == "substation":
                 return
             if len(w.nodes) < 3:
                 return
