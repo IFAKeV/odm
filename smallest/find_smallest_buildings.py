@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import math
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 try:  # optional dependency
     import osmium  # type: ignore
@@ -50,16 +50,13 @@ if osmium is not None:
     class BuildingCollector(osmium.SimpleHandler):
         """Collect buildings with house numbers."""
 
-        def __init__(self, housenumber: Optional[str] = None) -> None:
+        def __init__(self) -> None:
             super().__init__()
-            self.housenumber = housenumber
             self.buildings: List[Tuple[int, List[Coord]]] = []
 
         def way(self, w: osmium.osm.Way) -> None:  # type: ignore[override]
             hn = w.tags.get("addr:housenumber")
             if not w.tags.get("building") or not hn:
-                return
-            if self.housenumber and hn != self.housenumber:
                 return
             if len(w.nodes) < 3:
                 return
@@ -73,7 +70,7 @@ if osmium is not None:
             self.buildings.append((w.id, coords))
 else:  # pragma: no cover - used when osmium is missing
     class BuildingCollector:  # type: ignore[no-redef]
-        def __init__(self, housenumber: Optional[str] = None) -> None:
+        def __init__(self) -> None:
             raise RuntimeError("osmium is required to collect buildings")
 
 
@@ -84,13 +81,12 @@ def main() -> None:
                         help="Number of buildings to report")
     parser.add_argument("--out", help="Optional CSV output path")
     parser.add_argument("--html", help="Optional HTML output path")
-    parser.add_argument("--housenumber", help="Filter by specific house number")
     args = parser.parse_args()
 
     if osmium is None:  # pragma: no cover - runtime check
         raise RuntimeError("osmium is required but not installed")
 
-    collector = BuildingCollector(args.housenumber)
+    collector = BuildingCollector()
     collector.apply_file(args.pbf, locations=True)
 
     items = []
