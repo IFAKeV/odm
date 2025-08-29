@@ -97,12 +97,12 @@ def main() -> None:
 
     node_usage: Dict[int, int] = {}
     for _, _, node_ids in collector.buildings:
-        for nid in node_ids:
+        for nid in set(node_ids):
             node_usage[nid] = node_usage.get(nid, 0) + 1
 
     freestanding: List[Tuple[int, List[Coord]]] = []
     for bid, coords, node_ids in collector.buildings:
-        if all(node_usage[nid] == 1 for nid in node_ids):
+        if all(node_usage[nid] == 1 for nid in set(node_ids)):
             freestanding.append((bid, coords))
 
     items = []
